@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react'
+import PitchShifter from './PitchShifter'
 
 const TOOLS = [
+  { id: 'pitch-shifter', name: '🎛 Voice Pitch Changer', desc: 'Change your voice by shifting pitch in real-time with live visualization' },
   { id: 'audio2text', name: '🎤 Audio to Text', desc: 'Transcribe speech from audio files' },
   { id: 'url2wav', name: '🔗 URL to WAV', desc: 'Download and convert audio from URL' },
   { id: 'visualization', name: '📊 Speech Visualization', desc: 'Visualize audio waveforms and spectrograms' },
@@ -104,6 +106,8 @@ export default function App() {
               </div>
             ))}
           </div>
+        ) : selectedTool === 'pitch-shifter' ? (
+          <PitchShifter onBack={resetForm} />
         ) : (
           <>
             <div className="tool-header">

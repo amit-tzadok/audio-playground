@@ -1,220 +1,163 @@
 """
-File: Amit Tzadok
+File: Amit Tzadok - Speaker Detection by Pitch (Improved Turn-Based)
 Author: Amit Tzadok <amit.tzadok@icloud.com>
-Created: 2025-07-22 11:05:31
-Description: This script processes audio files to estimate fundamental frequency (F0) and compress audio segments using DCT.
+Description: Clean turn-based speaker detection for two girls speaking in turns.
 """
 
 import wave
 import numpy as np
 import matplotlib.pyplot as plt
-from numpy.lib.stride_tricks import sliding_window_view
-from scipy.signal import find_peaks
-from scipy.io import wavfile
-from scipy.fftpack import dct, idct
+from scipy.ndimage import median_filter
+import librosa
+from sklearn.cluster import KMeans
 
-# Load a wave file and return audio data, sample rate, and number of channels
+
 def load_wave_file(wave_fname):
-    sample_width_to_dtype = {1: np.int8, 2: np.int16, 4: np.int32}
+    """Load WAV file as mono normalized audio"""
     with wave.open(wave_fname, 'rb') as wav_file:
         sample_rate = wav_file.getframerate()
         num_channels = wav_file.getnchannels()
-        n_bytes_per_sample = wav_file.getsampwidth()
-        if n_bytes_per_sample not in sample_width_to_dtype:
-            raise ValueError(f"Unsupported sample width {n_bytes_per_sample}")
         raw_data = wav_file.readframes(wav_file.getnframes())
-        audio_array = np.frombuffer(raw_data, dtype=sample_width_to_dtype[n_bytes_per_sample])
+        audio_array = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32)
         if num_channels == 2:
-            audio_array = audio_array.reshape(-1, 2)
-            audio_array = audio_array[:, 0]  # Convert to mono
-    # print(f"Loaded {wave_fname}: {audio_array.shape[0]} samples, {sample_rate} Hz, {num_channels} channels")
-    # print(f"audio_array: {audio_array[:100]}...")  # Print first 10 samples for debugging
-    return audio_array, sample_rate, num_channels
+            audio_array = audio_array.reshape(-1, 2)[:, 0]
+        audio_array /= (np.max(np.abs(audio_array)) + 1e-8)
+        return audio_array, sample_rate
 
-# Crop the waveform to a specified range in seconds
-def crop_waveform(audio_array, sample_rate, seconds_range):
-    if len(seconds_range) == 2:
-        start_sample = int(seconds_range[0] * sample_rate)
-        end_sample = int(seconds_range[1] * sample_rate)
-        audio_subarray = audio_array[start_sample:min(end_sample, audio_array.shape[0])]
-    else:
-        raise ValueError(f"Unsupported seconds_range len {len(seconds_range)}")
-    return audio_subarray
 
-# Plot the waveform of the audio data
-def plot_waveform(audio_array, sample_rate, num_channels, seconds_range=None):
-    if audio_array is None:
-        print("Cannot plot: Audio data not loaded.")
-        return
-    if seconds_range is None:
-        audio_subarray = audio_array
-    else:
-        audio_subarray = crop_waveform(audio_array, sample_rate, seconds_range)
-    num_samples = audio_subarray.shape[0]
-    duration = num_samples / sample_rate
-    time_axis = np.linspace(0, duration, num_samples)
-    fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(time_axis, audio_subarray, label='Mono', color='blue')
-    ax.set_xlabel('Time (seconds)')
-    ax.set_ylabel('Amplitude')
-    ax.set_title('Audio Waveform')
-    ax.legend()
-    ax.grid(True)
-    ax2 = ax.twiny()
-    ax2.set_xlim(ax.get_xlim())
-    time_ticks = ax.get_xticks()
-    time_ticks = time_ticks[(time_ticks >= 0) & (time_ticks <= duration)]
-    sample_ticks = (time_ticks * sample_rate).astype(int)
-    ax2.set_xticks(time_ticks)
-    ax2.set_xticklabels([f'{s}' for s in sample_ticks])
-    ax2.set_xlabel('Sample Number')
-    plt.tight_layout()
-    plt.show()
+def get_f0_and_voiced(audio_array, sample_rate, hop_length=256):
+    """Get F0 using pyin"""
+    f0, voiced_flag, _ = librosa.pyin(
+        y=audio_array,
+        fmin=librosa.note_to_hz('F3'),   # ~174 Hz
+        fmax=librosa.note_to_hz('E5'),   # ~659 Hz
+        sr=sample_rate,
+        hop_length=hop_length,
+        frame_length=2048,
+        fill_na=0.0
+    )
+    f0 = median_filter(f0, size=7)
+    times = librosa.frames_to_time(np.arange(len(f0)), sr=sample_rate, hop_length=hop_length)
+    return f0, times, voiced_flag
 
-# Compute similarity using a sliding window approach
-def compute_similarity(audio_array_cropped):
-    corr_patch = audio_array_cropped[0:audio_array_cropped.shape[0] // 5]
-    sliding_window_view_audio = sliding_window_view(audio_array_cropped, window_shape=corr_patch.shape[0])
-    corr_values = -1 * np.sum(np.abs(np.subtract(sliding_window_view_audio, corr_patch)), axis=1)
-    corr_values = corr_values - np.min(corr_values)
-    return corr_values
 
-# Plot the similarity values
-def plot_similarity(corr_values):
-    plt.figure(figsize=(10, 4))
-    plt.plot(corr_values)
-    plt.ylabel('Amplitude')
-    plt.title('Similarity')
-    plt.grid(True)
-    plt.show()
-
-def estimate_fundamental_frequency(corr_values, sample_rate):
-    max_value = np.max(corr_values[100:])  # ignore the first 100 samples due to strong corr
-    peaks, _ = find_peaks(corr_values, height=max_value * 0.7, rel_height=0.9)
-    print(f"number of peaks is {len(peaks)}")
-    print(f"peaks = {peaks}")
-    peaks_values = corr_values[peaks]
-    print(f"peaks values = {peaks_values}")
-    diff_peaks = peaks[1:] - peaks[:-1]
-    print(f"diff_peaks = {diff_peaks}")
-    if len(diff_peaks) > 0:
-        median_period_samples = np.median(diff_peaks)
-        fundamental_freq = sample_rate / median_period_samples
-        print(f"Estimated fundamental frequency (F0): {fundamental_freq:.2f} Hz")
-        return fundamental_freq
-    else:
-        print("Could not estimate fundamental frequency (no peaks found).")
-        return None
-
-def estimate_f0_over_time(audio_array, sample_rate, frame_size=512, hop_size=256):
-    f0_list = []
-    frame_starts = range(0, len(audio_array) - frame_size, hop_size)
-    for start in frame_starts:
-        frame = audio_array[start:start+frame_size]
-        corr_values = compute_similarity(frame)
-        f0 = estimate_fundamental_frequency(corr_values, sample_rate)
-        f0_list.append(f0 if f0 is not None else 0)
-    return np.array(f0_list), np.array(frame_starts) / sample_rate
-
-def detect_pitch_changes(f0_array, threshold=30):
-    changes = np.where(np.abs(np.diff(f0_array)) > threshold)[0]
-    return changes
-
-def compress_audio_segments_dct(audio_array, sample_rate, times, pitch_changes, n_coeffs=20):
-    # Segment boundaries
-    segment_starts = np.concatenate(([times[0]], times[pitch_changes]))
-    segment_ends = np.concatenate((times[pitch_changes], [times[-1]]))
-    compressed_segments = []
-    segment_lengths = []
-    for start, end in zip(segment_starts, segment_ends):
-        start_sample = int(start * sample_rate)
-        end_sample = int(end * sample_rate)
-        segment = audio_array[start_sample:end_sample]
-        if len(segment) == 0:
+def detect_turns(voiced_flag, min_turn_frames=12):
+    """Detect contiguous speech turns"""
+    is_speech = voiced_flag > 0.65
+    turns = []
+    i = 0
+    n = len(is_speech)
+    while i < n:
+        if not is_speech[i]:
+            i += 1
             continue
-        # Compute DCT and keep only the first n_coeffs
-        segment_dct = dct(segment, norm='ortho')
-        compressed = segment_dct[:n_coeffs]
-        compressed_segments.append(compressed)
-        segment_lengths.append(len(segment))
-    return compressed_segments, segment_lengths
+        start = i
+        while i < n and is_speech[i]:
+            i += 1
+        if (i - start) >= min_turn_frames:
+            turns.append((start, i))
+    return turns
 
-def reconstruct_audio_from_dct(compressed_segments, segment_lengths, n_coeffs=20):
-    # Reconstruct each segment using inverse DCT
-    reconstructed = []
-    for coeffs, seg_len in zip(compressed_segments, segment_lengths):
-        # Pad with zeros to original segment length
-        padded_coeffs = np.zeros(seg_len)
-        padded_coeffs[:n_coeffs] = coeffs
-        segment_recon = idct(padded_coeffs, norm='ortho')
-        reconstructed.append(segment_recon)
-    return np.concatenate(reconstructed).astype(np.int16)
 
 def main():
     from pathlib import Path
     script_dir = Path(__file__).parent
     recordings_folder = script_dir.parent / "tests" / "recordings"
-    file_path = recordings_folder / "recording-aba.wav"
-    if file_path.exists():
-        print(f"Found file: {file_path}")
-    else:
-        print(f"File {file_path} does not exist.")
+    file_path = recordings_folder / "mika_and_amit.wav"
+
+    if not file_path.exists():
+        print(f"File not found: {file_path}")
+        print("Please make sure the file is in the correct folder or update the path.")
         return
-    wave_fname = str(file_path)  # Convert Path to string
-    seconds_range = [3.0, 4.0]
-    audio_array, sample_rate, num_channels = load_wave_file(wave_fname)
-    plot_waveform(audio_array, sample_rate, num_channels)
-    plot_waveform(audio_array, sample_rate, num_channels, seconds_range)
-    audio_array_cropped = crop_waveform(audio_array, sample_rate, seconds_range)
-    corr_values = compute_similarity(audio_array_cropped)
-    plot_similarity(corr_values)
-    estimate_fundamental_frequency(corr_values, sample_rate)
-    # Analyze pitch over time
-    f0_array, times = estimate_f0_over_time(audio_array_cropped, sample_rate)
-    pitch_changes = detect_pitch_changes(f0_array)
-    print("Pitch change detected at times (seconds):", times[pitch_changes])
 
-    # Print all time segments between pitch changes
-    segment_starts = np.concatenate(([times[0]], times[pitch_changes]))
-    segment_ends = np.concatenate((times[pitch_changes], [times[-1]]))
-    print("\nTime segments between pitch changes:")
-    for start, end in zip(segment_starts, segment_ends):
-        print(f"Segment: {start:.3f} s to {end:.3f} s")
+    audio_array, sample_rate = load_wave_file(str(file_path))
+    print(f"Loaded: {len(audio_array)} samples @ {sample_rate} Hz")
 
-    # Optionally plot
-    plt.figure(figsize=(10, 4))
-    plt.plot(times, f0_array, label="F0 (Hz)")
-    plt.scatter(times[pitch_changes], f0_array[pitch_changes], color='red', label="Change")
-    plt.xlabel("Time (s)")
-    plt.ylabel("Estimated F0 (Hz)")
-    plt.legend()
-    plt.title("Fundamental Frequency Over Time")
-    plt.show()
+    # Get F0
+    f0_array, times, voiced_flag = get_f0_and_voiced(audio_array, sample_rate)
 
-    # Plot waveform with segmentation lines
-    plt.figure(figsize=(14, 5))
-    duration = len(audio_array) / sample_rate
-    time_axis = np.linspace(0, duration, len(audio_array))
-    plt.plot(time_axis, audio_array, label="Waveform", color='blue', alpha=0.6)
-    for t in times[pitch_changes]:
-        plt.axvline(x=t, color='red', linestyle='--', alpha=0.8, label='Pitch Change' if t == times[pitch_changes][0] else "")
-    plt.xlabel("Time (s)")
-    plt.ylabel("Amplitude")
-    plt.title("Audio Segmentation by Pitch Change")
-    plt.legend()
+    # Global clustering to find the two pitch centers
+    reliable_mask = (f0_array > 170) & (f0_array < 380) & (voiced_flag > 0.6)
+    if np.sum(reliable_mask) < 50:
+        print("Not enough voiced data to detect two speakers.")
+        return
+
+    kmeans = KMeans(n_clusters=2, random_state=42, n_init=10)
+    kmeans.fit(f0_array[reliable_mask].reshape(-1, 1))
+    centers = np.sort(kmeans.cluster_centers_.flatten())
+
+    print(f"\nDetected pitch centers:")
+    print(f"Speaker 0 (lower) ≈ {centers[0]:.0f} Hz")
+    print(f"Speaker 1 (higher) ≈ {centers[1]:.0f} Hz")
+
+    # Detect turns
+    turns = detect_turns(voiced_flag, min_turn_frames=12)
+    print(f"Detected {len(turns)} speech turns")
+
+    # Assign speaker to each entire turn
+    speaker_array = np.full(len(f0_array), -1, dtype=int)
+    for start, end in turns:
+        segment_f0 = f0_array[start:end]
+        valid_f0 = segment_f0[(segment_f0 > 170) & (segment_f0 < 380)]
+        if len(valid_f0) < 8:
+            continue
+        median_f0 = np.median(valid_f0)
+        # Assign to closest center
+        sp = 0 if abs(median_f0 - centers[0]) < abs(median_f0 - centers[1]) else 1
+        speaker_array[start:end] = sp
+
+    # Visualization
+    time_axis = np.linspace(0, len(audio_array)/sample_rate, len(audio_array))
+    colors = {-1: 'lightgray', 0: 'blue', 1: 'orange'}
+    hop_size = 256
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 9), sharex=True)
+
+    # Waveform colored by speaker
+    i = 0
+    while i < len(speaker_array):
+        j = i + 1
+        while j < len(speaker_array) and speaker_array[j] == speaker_array[i]:
+            j += 1
+        start_sample = i * hop_size
+        end_sample = min(j * hop_size, len(audio_array))
+        ax1.plot(time_axis[start_sample:end_sample], audio_array[start_sample:end_sample],
+                 color=colors[speaker_array[i]], linewidth=1.0, alpha=0.85)
+        i = j
+
+    ax1.set_title('Two Speakers by Pitch - Turn-Based (Blue = Lower Pitch Girl, Orange = Higher Pitch Girl)')
+    ax1.set_ylabel('Amplitude')
+    ax1.grid(True)
+
+    # F0 plot
+    ax2.plot(times, f0_array, color='gray', alpha=0.4, label='F0 contour')
+    for sp in [0, 1]:
+        mask = speaker_array == sp
+        if np.any(mask):
+            avg_f0 = np.mean(f0_array[mask])
+            ax2.scatter(times[mask], f0_array[mask], color=colors[sp], s=12,
+                        label=f'Speaker {sp} (avg {avg_f0:.0f} Hz)')
+    ax2.set_xlabel('Time (seconds)')
+    ax2.set_ylabel('F0 (Hz)')
+    ax2.legend()
+    ax2.grid(True)
+
     plt.tight_layout()
     plt.show()
 
-    # Advanced compression using DCT
-    n_coeffs = 20  # Number of DCT coefficients to keep per segment
-    # Use the full audio array for compression
-    f0_array, times = estimate_f0_over_time(audio_array, sample_rate)
-    pitch_changes = detect_pitch_changes(f0_array)
-    compressed_segments, segment_lengths = compress_audio_segments_dct(
-        audio_array, sample_rate, times, pitch_changes, n_coeffs=n_coeffs
-    )
-    reconstructed = reconstruct_audio_from_dct(compressed_segments, segment_lengths, n_coeffs=n_coeffs)
-    wavfile.write("compressed_dct.wav", sample_rate, reconstructed)
+    # Print timeline
+    print("\n=== SPEAKER TIMELINE ===")
+    current_sp = speaker_array[0]
+    start = times[0]
+    for i in range(1, len(speaker_array)):
+        if speaker_array[i] != current_sp or i == len(speaker_array)-1:
+            end = times[i]
+            if current_sp != -1:
+                avg_f0 = np.mean(f0_array[(times >= start) & (times < end) & (f0_array > 0)])
+                print(f"{start:.2f} – {end:.2f} s → Speaker {current_sp} (avg {avg_f0:.0f} Hz)")
+            start = times[i]
+            current_sp = speaker_array[i]
+
 
 if __name__ == "__main__":
     main()
