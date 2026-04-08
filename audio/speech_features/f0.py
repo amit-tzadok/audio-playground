@@ -148,15 +148,22 @@ def main():
     # Print timeline
     print("\n=== SPEAKER TIMELINE ===")
     current_sp = speaker_array[0]
-    start = times[0]
+    seg_start = 0
     for i in range(1, len(speaker_array)):
-        if speaker_array[i] != current_sp or i == len(speaker_array)-1:
-            end = times[i]
+        if speaker_array[i] != current_sp:
             if current_sp != -1:
-                avg_f0 = np.mean(f0_array[(times >= start) & (times < end) & (f0_array > 0)])
-                print(f"{start:.2f} – {end:.2f} s → Speaker {current_sp} (avg {avg_f0:.0f} Hz)")
-            start = times[i]
+                valid_f0 = f0_array[seg_start:i]
+                valid_f0 = valid_f0[valid_f0 > 0]
+                if len(valid_f0) > 0:
+                    print(f"{times[seg_start]:.2f} – {times[i]:.2f} s → Speaker {current_sp} (avg {np.mean(valid_f0):.0f} Hz)")
+            seg_start = i
             current_sp = speaker_array[i]
+    # Final segment
+    if current_sp != -1:
+        valid_f0 = f0_array[seg_start:]
+        valid_f0 = valid_f0[valid_f0 > 0]
+        if len(valid_f0) > 0:
+            print(f"{times[seg_start]:.2f} – {times[-1]:.2f} s → Speaker {current_sp} (avg {np.mean(valid_f0):.0f} Hz)")
 
 
 if __name__ == "__main__":
