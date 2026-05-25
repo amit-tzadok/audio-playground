@@ -1,24 +1,58 @@
 """
-File: Amit Tzadok - Speaker Diarization via Speaker Embeddings
+File: Amit Tzadok - Speaker Diarization via pyannote-audio
 Author: Amit Tzadok <amit.tzadok@icloud.com>
-Description: Turn-based speaker separation using resemblyzer d-vector embeddings.
+Description: Turn-based speaker separation using pyannote speaker-diarization-3.1.
 """
 
+import json
 import wave
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from sklearn.cluster import SpectralClustering
-from scipy.ndimage import median_filter
-from resemblyzer import VoiceEncoder, preprocess_wav
+from pyannote.audio import Pipeline
+from pathlib import Path
 import time
 import signal
 import subprocess
-from pathlib import Path
+
+
+COLORS = ['steelblue', 'darkorange', 'green', 'red']
+
+
+def seconds_to_timestamp(seconds):
+    """Convert float seconds to 'HH:MM:SS,mmm' format expected by speaker_splitter."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    ms = int(round((s - int(s)) * 1000))
+    return f"{h:02d}:{m:02d}:{int(s):02d},{ms:03d}"
+
+
+def export_segments_json(segments, output_path):
+    """
+    Write diarization segments to JSON compatible with speaker_splitter.py.
+
+    Args:
+        segments: list of (start, end, speaker_label) tuples
+        output_path: str or Path
+    """
+    data = {
+        "segments": [
+            {
+                "speaker": label,
+                "start": seconds_to_timestamp(start),
+                "end": seconds_to_timestamp(end),
+            }
+            for start, end, label in segments
+        ]
+    }
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    print(f"Diarization JSON written to: {output_path}")
 
 
 def load_wave_file(wave_fname):
-    """Load WAV file as mono normalized float32"""
+    """Load WAV file as mono normalized float32."""
     with wave.open(wave_fname, 'rb') as wav_file:
         sample_rate = wav_file.getframerate()
         num_channels = wav_file.getnchannels()
@@ -32,115 +66,76 @@ def load_wave_file(wave_fname):
 
 def main():
     script_dir = Path(__file__).parent
-    file_path = script_dir.parent / "tests" / "recordings" / "mika_and_amit.wav"
+    file_path = script_dir.parent / "tests" / "recordings" / "podcast_segment.wav"
 
     if not file_path.exists():
         print(f"File not found: {file_path}")
         return
 
-    # Load original audio for display
     audio_array, sample_rate = load_wave_file(str(file_path))
     total_duration = len(audio_array) / sample_rate
     print(f"Loaded: {len(audio_array)} samples @ {sample_rate} Hz ({total_duration:.1f}s)")
 
-    # resemblyzer: preprocess (resamples to 16kHz internally) + compute embeddings
-    print("Computing speaker embeddings...")
-    encoder = VoiceEncoder()
-    wav16 = preprocess_wav(str(file_path))  # float32 at 16kHz
+    # Run pyannote diarization
+    print("Loading pyannote pipeline...")
+    from huggingface_hub import get_token
+    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1",
+                                        token=get_token())
 
-    # rate=32 → one embedding every ~31ms; finer resolution
-    _, embeds, wav_splits = encoder.embed_utterance(wav16, return_partials=True, rate=32)
-    print(f"Got {len(embeds)} embeddings")
+    print("Running diarization...")
+    diarization = pipeline(str(file_path), num_speakers=2)
 
-    # Center time (in seconds) for each embedding window
-    embed_times = np.array([(s.start + s.stop) / 2 / 16000 for s in wav_splits])
-
-    # Cosine similarity matrix (embeds are L2-normalised so dot product = cosine sim)
-    similarity = np.dot(embeds, embeds.T).clip(0, 1)
-
-    # Spectral clustering — handles non-spherical clusters, standard for diarization
-    clustering = SpectralClustering(n_clusters=2, affinity='precomputed',
-                                    random_state=42, n_init=20)
-    embed_labels = clustering.fit_predict(similarity)
-
-    # Temporal smoothing — suppress isolated one-frame speaker flips
-    embed_labels = median_filter(embed_labels, size=9).astype(int)
-    print(f"Label distribution: Speaker 0 = {np.sum(embed_labels==0)}, Speaker 1 = {np.sum(embed_labels==1)}")
-
-    # Map embedding labels onto the full audio sample axis via nearest-neighbor
-    time_axis = np.linspace(0, total_duration, len(audio_array))
-    indices = np.searchsorted(embed_times, time_axis)
-    indices = np.clip(indices, 0, len(embed_times) - 1)
-    # Pick the closer of left/right embedding
-    left = np.clip(indices - 1, 0, len(embed_times) - 1)
-    left_dist = np.abs(time_axis - embed_times[left])
-    right_dist = np.abs(time_axis - embed_times[indices])
-    nearest = np.where(left_dist < right_dist, left, indices)
-    sample_labels = embed_labels[nearest]
+    # Collect segments
+    segments = [
+        (turn.start, turn.end, speaker)
+        for turn, _, speaker in diarization.exclusive_speaker_diarization.itertracks(yield_label=True)
+    ]
+    print(f"Got {len(segments)} segments")
 
     # Print timeline
-    colors = {0: 'steelblue', 1: 'darkorange'}
     print("\n=== SPEAKER TIMELINE ===")
-    prev = sample_labels[0]
-    seg_start_t = 0.0
-    for i in range(1, len(sample_labels)):
-        t = time_axis[i]
-        if sample_labels[i] != prev:
-            print(f"{seg_start_t:.2f}s – {t:.2f}s → Speaker {prev}")
-            seg_start_t = t
-            prev = sample_labels[i]
-    print(f"{seg_start_t:.2f}s – {total_duration:.2f}s → Speaker {prev}")
+    for start, end, speaker in segments:
+        print(f"{start:.2f}s – {end:.2f}s → {speaker}")
 
-    # ── Visualization ──────────────────────────────────────────────────────────
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
-                                   gridspec_kw={'height_ratios': [2, 1]})
+    # Export JSON for speaker_splitter.py
+    json_out = file_path.with_suffix('.diarization.json')
+    export_segments_json(segments, json_out)
 
-    # Top: waveform colored by speaker
+    # Map segments to sample-level labels for waveform coloring
+    speakers = sorted(set(s for _, _, s in segments))
+    speaker_to_idx = {s: i for i, s in enumerate(speakers)}
+
+    time_axis = np.linspace(0, total_duration, len(audio_array))
+    sample_labels = np.full(len(audio_array), -1, dtype=int)
+    for start, end, speaker in segments:
+        start_idx = np.searchsorted(time_axis, start)
+        end_idx = np.searchsorted(time_axis, end)
+        sample_labels[start_idx:end_idx] = speaker_to_idx[speaker]
+
+    # Visualization
+    fig, ax = plt.subplots(figsize=(14, 5))
+
     chunk = 256
-    i = 0
     n_chunks = len(audio_array) // chunk
     for c in range(n_chunks):
-        start = c * chunk
-        end = start + chunk
-        sp = sample_labels[start]
-        ax1.plot(time_axis[start:end], audio_array[start:end],
-                 color=colors[sp], linewidth=0.8, alpha=0.9)
+        s = c * chunk
+        e = s + chunk
+        idx = sample_labels[s]
+        color = COLORS[idx % len(COLORS)] if idx >= 0 else 'lightgray'
+        ax.plot(time_axis[s:e], audio_array[s:e], color=color, linewidth=0.8, alpha=0.9)
 
-    ax1.set_title(
-        'Speaker Diarization via Embeddings  —  '
-        'Blue = Speaker 0   Orange = Speaker 1\n'
-        'Press Space to play/pause',
-        fontsize=11
-    )
-    ax1.set_ylabel('Amplitude')
-    ax1.grid(True, alpha=0.4)
+    legend_str = '   '.join(f'{COLORS[i]} = {spk}' for i, spk in enumerate(speakers))
+    ax.set_title(f'Speaker Diarization (pyannote-3.1) — {legend_str}\nPress Space to play/pause',
+                 fontsize=11)
+    ax.set_ylabel('Amplitude')
+    ax.set_xlabel('Time (seconds)')
+    ax.grid(True, alpha=0.4)
 
-    # Bottom: per-embedding speaker confidence using mean cluster embeddings
-    center0 = np.mean(embeds[embed_labels == 0], axis=0)
-    center1 = np.mean(embeds[embed_labels == 1], axis=0)
-    center0 /= np.linalg.norm(center0) + 1e-8
-    center1 /= np.linalg.norm(center1) + 1e-8
-
-    conf = np.dot(embeds, center0) - np.dot(embeds, center1)
-    ax2.fill_between(embed_times, 0, conf, where=conf > 0,
-                     color='steelblue', alpha=0.6, label='Speaker 0')
-    ax2.fill_between(embed_times, conf, 0, where=conf < 0,
-                     color='darkorange', alpha=0.6, label='Speaker 1')
-    ax2.axhline(0, color='gray', linewidth=0.8)
-    ax2.set_ylabel('Embedding confidence\n(+ = Spk 0, − = Spk 1)')
-    ax2.set_xlabel('Time (seconds)')
-    ax2.legend(loc='upper right')
-    ax2.grid(True, alpha=0.4)
-
-    # Playback cursors
-    cursor1 = ax1.axvline(x=0, color='red', linewidth=1.5, alpha=0.85, zorder=5)
-    cursor2 = ax2.axvline(x=0, color='red', linewidth=1.5, alpha=0.85, zorder=5)
-
+    cursor = ax.axvline(x=0, color='red', linewidth=1.5, alpha=0.85, zorder=5)
     plt.tight_layout()
 
-    # ── Playback ───────────────────────────────────────────────────────────────
-    state = {'playing': True, 'start_wall': time.time(),
-             'start_pos': 0.0, 'paused_at': 0.0}
+    # Playback
+    state = {'playing': True, 'start_wall': time.time(), 'start_pos': 0.0, 'paused_at': 0.0}
     proc = subprocess.Popen(['afplay', str(file_path)])
 
     def toggle_playback(event):
@@ -169,11 +164,10 @@ def main():
                 pos = total_duration
         else:
             pos = state['paused_at']
-        cursor1.set_xdata([pos, pos])
-        cursor2.set_xdata([pos, pos])
+        cursor.set_xdata([pos, pos])
         fig.canvas.draw_idle()
 
-    ani = animation.FuncAnimation(  # noqa: F841 — must stay referenced
+    ani = animation.FuncAnimation(  # noqa: F841
         fig, update, interval=40, blit=False, cache_frame_data=False
     )
     plt.show()
