@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audio-platform-config
+  namespace: audio-platform
+data:
+  CELERY_BROKER_URL: "redis://redis-svc:6379/0"
+  CELERY_RESULT_BACKEND: "redis://redis-svc:6379/0"
+  # Update this to the actual cluster hostname when deploying to IKS/OpenShift
+  ALLOWED_ORIGINS: '["http://localhost:30080","http://127.0.0.1:30080"]'

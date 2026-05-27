@@ -23,7 +23,7 @@ export default function App() {
     if (task && status !== 'SUCCESS' && status !== 'FAILURE') {
       iv = setInterval(async () => {
         try {
-          const res = await fetch(`http://localhost:8000/status/${task}`)
+          const res = await fetch(`/api/status/${task}`)
           const j = await res.json()
           setStatus(j.state)
           setResult(j.result)
@@ -52,7 +52,7 @@ export default function App() {
       fd.append('tool', selectedTool)
       if (url) fd.append('url', url)
       
-      const res = await fetch('http://localhost:8000/upload', { method: 'POST', body: fd })
+      const res = await fetch('/api/upload', { method: 'POST', body: fd })
       const j = await res.json()
       setTask(j.task_id)
       setStatus('PENDING')

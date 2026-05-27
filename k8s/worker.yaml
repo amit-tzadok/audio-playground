@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: audio-platform
+  labels:
+    app: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: worker
+          image: audio-backend:latest
+          imagePullPolicy: Never
+          command:
+            - celery
+            - -A
+            - app.main.celery
+            - worker
+            - --loglevel=info
+          envFrom:
+            - configMapRef:
+                name: audio-platform-config
+          volumeMounts:
+            - name: audio-data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.main.celery
+                - inspect
+                - ping
+                - -d
+                - celery@$(HOSTNAME)
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+      volumes:
+        - name: audio-data
+          persistentVolumeClaim:
+            claimName: audio-data-pvc
