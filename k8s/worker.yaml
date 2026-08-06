@@ -28,6 +28,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: audio-platform-config
+            - secretRef:
+                name: hf-token
           volumeMounts:
             - name: audio-data
               mountPath: /app/data

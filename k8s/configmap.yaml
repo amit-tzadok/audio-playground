@@ -8,3 +8,6 @@ data:
   CELERY_RESULT_BACKEND: "redis://redis-svc:6379/0"
   # Update this to the actual cluster hostname when deploying to IKS/OpenShift
   ALLOWED_ORIGINS: '["http://localhost:30080","http://127.0.0.1:30080"]'
+  # Persists downloaded pyannote model weights on the audio-data PVC so the
+  # worker doesn't re-download them (~150MB+) on every pod restart.
+  HF_HOME: "/app/data/.hf-cache"

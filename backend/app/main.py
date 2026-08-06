@@ -1,6 +1,7 @@
 import json
 import os
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks
+from typing import Optional
+from fastapi import FastAPI, File, Form, UploadFile, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
@@ -34,14 +35,15 @@ def health():
 
 
 @app.post("/upload")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(file: UploadFile = File(...), num_speakers: Optional[int] = Form(None)):
     # save uploaded file and enqueue processing
     dest = DATA_DIR / file.filename
-    async with file as f, open(dest, "wb") as out:
-        content = await f.read()
+    content = await file.read()
+    with open(dest, "wb") as out:
         out.write(content)
+    await file.close()
 
-    task = process_audio.delay(str(dest))
+    task = process_audio.delay(str(dest), num_speakers)
     return JSONResponse({"filename": file.filename, "task_id": task.id})
 
 
@@ -52,12 +54,10 @@ def task_status(task_id: str):
 
 
 @celery.task(name="process_audio")
-def process_audio(path: str):
-    # placeholder processing: compute duration using librosa if available
+def process_audio(path: str, num_speakers: Optional[int] = None):
     try:
-        import librosa
-        y, sr = librosa.load(path, sr=None, mono=True)
-        duration = float(len(y)) / float(sr)
-        return {"path": path, "duration": duration}
+        from app.diarization import diarize
+        segments = diarize(path, num_speakers=num_speakers)
+        return {"path": path, "segments": segments}
     except Exception as e:
         return {"path": path, "error": str(e)}

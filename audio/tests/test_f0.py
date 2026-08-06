@@ -1,6 +1,6 @@
 """Unit tests for audio/speech_features/f0.py"""
 
-import io
+import json
 import os
 import sys
 import tempfile
@@ -10,18 +10,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'speech_features'))
-from f0 import load_wave_file, get_f0_and_voiced, detect_turns
-
-try:
-    import numba  # noqa: F401
-    _NUMBA_AVAILABLE = True
-except ImportError:
-    _NUMBA_AVAILABLE = False
-
-requires_numba = pytest.mark.skipif(
-    not _NUMBA_AVAILABLE,
-    reason="numba not available (NumPy version incompatibility)"
-)
+from f0 import load_wave_file, seconds_to_timestamp, export_segments_json
 
 
 # ---------------------------------------------------------------------------
@@ -91,78 +80,55 @@ class TestLoadWaveFile:
 
 
 # ---------------------------------------------------------------------------
-# get_f0_and_voiced
+# seconds_to_timestamp
 # ---------------------------------------------------------------------------
 
-class TestGetF0AndVoiced:
-    @requires_numba
-    def test_output_lengths_consistent(self):
-        sr = 22050
-        audio = (np.random.randn(sr) * 0.01).astype(np.float32)
-        f0, times, voiced = get_f0_and_voiced(audio, sr)
-        assert len(f0) == len(times) == len(voiced)
+class TestSecondsToTimestamp:
+    def test_zero(self):
+        assert seconds_to_timestamp(0) == "00:00:00,000"
 
-    @requires_numba
-    def test_sine_wave_detects_approximate_f0(self):
-        sr = 22050
-        freq = 220.0  # Hz — within pyin's F3–E5 window
-        t = np.linspace(0, 1.0, sr, endpoint=False)
-        audio = (np.sin(2 * np.pi * freq * t) * 0.8).astype(np.float32)
-        f0, times, voiced = get_f0_and_voiced(audio, sr)
-        voiced_f0 = f0[voiced > 0.5]
-        assert len(voiced_f0) > 0, "pyin should mark frames as voiced for a pure sine"
-        # Allow ±30 Hz after median filtering
-        assert np.median(voiced_f0) == pytest.approx(freq, abs=30)
+    def test_sub_minute_with_millis(self):
+        assert seconds_to_timestamp(5.25) == "00:00:05,250"
 
-    @requires_numba
-    def test_silence_has_no_voiced_frames(self):
-        sr = 22050
-        audio = np.zeros(sr, dtype=np.float32)
-        f0, times, voiced = get_f0_and_voiced(audio, sr)
-        assert np.sum(voiced > 0.5) == 0
+    def test_minutes_and_hours(self):
+        assert seconds_to_timestamp(3725.5) == "01:02:05,500"
+
+    def test_rounds_milliseconds(self):
+        assert seconds_to_timestamp(0.1234) == "00:00:00,123"
 
 
 # ---------------------------------------------------------------------------
-# detect_turns
+# export_segments_json
 # ---------------------------------------------------------------------------
 
-class TestDetectTurns:
-    def test_single_turn(self):
-        voiced = np.array([0.0] * 5 + [0.9] * 20 + [0.0] * 5)
-        turns = detect_turns(voiced, min_turn_frames=12)
-        assert turns == [(5, 25)]
+class TestExportSegmentsJson:
+    def test_writes_expected_structure(self):
+        segments = [
+            (0.0, 1.5, "SPEAKER_00"),
+            (1.5, 3.0, "SPEAKER_01"),
+        ]
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            export_segments_json(segments, path)
+            with open(path) as f:
+                data = json.load(f)
+            assert data == {
+                "segments": [
+                    {"speaker": "SPEAKER_00", "start": "00:00:00,000", "end": "00:00:01,500"},
+                    {"speaker": "SPEAKER_01", "start": "00:00:01,500", "end": "00:00:03,000"},
+                ]
+            }
+        finally:
+            os.unlink(path)
 
-    def test_turn_below_min_length_dropped(self):
-        voiced = np.array([0.0] * 5 + [0.9] * 11 + [0.0] * 5)
-        turns = detect_turns(voiced, min_turn_frames=12)
-        assert turns == []
-
-    def test_turn_exactly_at_min_length_kept(self):
-        voiced = np.array([0.0] * 5 + [0.9] * 12 + [0.0] * 5)
-        turns = detect_turns(voiced, min_turn_frames=12)
-        assert turns == [(5, 17)]
-
-    def test_two_turns_separated_by_silence(self):
-        voiced = np.array([0.9] * 15 + [0.0] * 10 + [0.9] * 15)
-        turns = detect_turns(voiced, min_turn_frames=12)
-        assert turns == [(0, 15), (25, 40)]
-
-    def test_all_silence_returns_empty(self):
-        voiced = np.zeros(50)
-        assert detect_turns(voiced) == []
-
-    def test_all_voiced_returns_one_turn(self):
-        voiced = np.ones(50)
-        turns = detect_turns(voiced, min_turn_frames=12)
-        assert turns == [(0, 50)]
-
-    def test_voiced_threshold_boundary(self):
-        # Exactly 0.65 should NOT be treated as speech (is_speech = voiced_flag > 0.65)
-        voiced = np.array([0.65] * 20)
-        turns = detect_turns(voiced, min_turn_frames=12)
-        assert turns == []
-
-        # Just above threshold should be speech
-        voiced2 = np.array([0.66] * 20)
-        turns2 = detect_turns(voiced2, min_turn_frames=12)
-        assert len(turns2) == 1
+    def test_empty_segments(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            export_segments_json([], path)
+            with open(path) as f:
+                data = json.load(f)
+            assert data == {"segments": []}
+        finally:
+            os.unlink(path)

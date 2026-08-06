@@ -3,3 +3,5 @@
 audio/.DS_Store
 audio/tests/recordings/mika_and_amit.wav
 Mika and Amit.m4a
+.env
+k8s/secret.yaml
