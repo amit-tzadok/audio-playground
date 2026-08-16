@@ -233,12 +233,12 @@ export default function SpeakerDiarizationResult({ task, result }) {
                   />
                 </div>
                 <span className="remix-progress-label">
-                  Naturalizing speech: chunk {remixResult.current} of ~{remixResult.total}
+                  Regenerating speech: turn {remixResult.current} of {remixResult.total}
                   {' '}({Math.round((remixResult.current / remixResult.total) * 100)}%)
                 </span>
               </>
             ) : (
-              <span className="remix-progress-label">{remixStatus === 'STARTED' ? 'Stretching and reassembling audio…' : 'Queued…'}</span>
+              <span className="remix-progress-label">{remixStatus === 'STARTED' ? 'Transcribing and cloning voice…' : 'Queued…'}</span>
             )}
           </div>
         )}

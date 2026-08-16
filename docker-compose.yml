@@ -34,15 +34,16 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - HF_TOKEN=${HF_TOKEN}
-      - ENHANCER_URL=http://enhancer:8100
+      - TTS_URL=http://tts:8200
     depends_on:
       - redis
-      - enhancer
+      - tts
 
-  enhancer:
-    build: ./backend/enhancer
+  tts:
+    build: ./backend/tts
     volumes:
-      - resemble-cache:/usr/local/lib/python3.11/site-packages/resemble_enhance/model_repo
+      - tts-model-cache:/root/.local/share/tts
+      - whisper-cache:/root/.cache/huggingface
 
   frontend:
     build: ./frontend
@@ -53,4 +54,5 @@ services:
 
 volumes:
   hf-cache:
-  resemble-cache:
+  tts-model-cache:
+  whisper-cache:
