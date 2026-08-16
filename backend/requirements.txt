@@ -7,3 +7,6 @@ aiofiles==23.1.0
 soundfile
 numpy
 pyannote-audio==4.0.4
+yt-dlp
+anthropic
+requests

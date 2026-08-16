@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import PitchShifter from './PitchShifter'
+import SpeakerDiarizationResult from './SpeakerDiarizationResult'
 
 const TOOLS = [
   { id: 'pitch-shifter', name: '🎛 Voice Pitch Changer', desc: 'Change your voice by shifting pitch in real-time with live visualization' },
@@ -7,12 +8,14 @@ const TOOLS = [
   { id: 'url2wav', name: '🔗 URL to WAV', desc: 'Download and convert audio from URL' },
   { id: 'visualization', name: '📊 Speech Visualization', desc: 'Visualize audio waveforms and spectrograms' },
   { id: 'fundamental-freq', name: '🎵 Fundamental Frequency', desc: 'Analyze pitch and F0 contours' },
+  { id: 'speaker-diarization', name: '🗣 Speaker Diarization', desc: 'Detect who spoke when in an audio file' },
 ]
 
 export default function App() {
   const [selectedTool, setSelectedTool] = useState(null)
   const [file, setFile] = useState(null)
   const [url, setUrl] = useState('')
+  const [numSpeakers, setNumSpeakers] = useState('')
   const [task, setTask] = useState(null)
   const [status, setStatus] = useState(null)
   const [result, setResult] = useState(null)
@@ -51,6 +54,7 @@ export default function App() {
       if (file) fd.append('file', file)
       fd.append('tool', selectedTool)
       if (url) fd.append('url', url)
+      if (selectedTool === 'speaker-diarization' && numSpeakers) fd.append('num_speakers', numSpeakers)
       
       const res = await fetch('/api/upload', { method: 'POST', body: fd })
       const j = await res.json()
@@ -67,6 +71,7 @@ export default function App() {
     setSelectedTool(null)
     setFile(null)
     setUrl('')
+    setNumSpeakers('')
     setTask(null)
     setStatus(null)
     setResult(null)
@@ -142,7 +147,19 @@ export default function App() {
                   </label>
                 </div>
               )}
-              <button 
+              {selectedTool === 'speaker-diarization' && (
+                <div className="url-input-wrapper">
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Number of speakers (optional, auto-detected if blank)"
+                    value={numSpeakers}
+                    onChange={(e) => setNumSpeakers(e.target.value)}
+                    className="url-input"
+                  />
+                </div>
+              )}
+              <button
                 onClick={processAudio} 
                 disabled={(selectedTool !== 'url2wav' && !file) || (selectedTool === 'url2wav' && !url) || uploading}
               >
@@ -180,7 +197,15 @@ export default function App() {
                   <div className="status-row">
                     <span className="status-label">Result:</span>
                     <div className="status-value">
-                      <pre>{JSON.stringify(result, null, 2)}</pre>
+                      {selectedTool === 'url2wav' && result.path && !result.error ? (
+                        <a href={`/api/download/${task}`} download={result.filename}>
+                          ⬇ Download {result.filename}
+                        </a>
+                      ) : selectedTool === 'speaker-diarization' && result.segments && !result.error ? (
+                        <SpeakerDiarizationResult task={task} result={result} />
+                      ) : (
+                        <pre>{JSON.stringify(result, null, 2)}</pre>
+                      )}
                     </div>
                   </div>
                 )}
