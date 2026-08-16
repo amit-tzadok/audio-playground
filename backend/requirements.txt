@@ -10,3 +10,5 @@ pyannote-audio==4.0.4
 yt-dlp
 anthropic
 requests
+noisereduce
+demucs

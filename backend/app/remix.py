@@ -1,26 +1,19 @@
-import io
-import os
 import subprocess
 import tempfile
-from math import gcd
 from pathlib import Path
 
 import numpy as np
-import requests
 import soundfile as sf
-from scipy.signal import resample_poly
-
-TTS_URL = os.environ.get("TTS_URL", "http://tts:8200")
-TTS_TIMEOUT = 300
-REFERENCE_CLIP_SECONDS = 15
-MIN_TARGET_DURATION = 0.3
 
 
 def _stretch_audio(chunk, sr, factor):
     """Time-stretch a numpy audio array by `factor` (>1 = faster/shorter,
     <1 = slower/longer), preserving pitch, via ffmpeg's rubberband filter.
-    Used as a fallback when TTS regeneration isn't available for a turn
-    (empty transcription, or a service failure)."""
+
+    Rubber Band is a phase-vocoder-alternative built for this — its
+    formant-preserving mode keeps voice timbre natural at stretch factors
+    where ffmpeg's plain WSOLA-based atempo starts to sound robotic.
+    """
     if abs(factor - 1.0) < 1e-6 or len(chunk) == 0:
         return chunk
     with tempfile.TemporaryDirectory() as tmp:
@@ -52,148 +45,58 @@ def _fade(chunk, sr, fade_ms=8):
     return chunk
 
 
-def _resample(audio, from_sr, to_sr):
-    if from_sr == to_sr:
-        return audio
-    g = gcd(from_sr, to_sr)
-    return resample_poly(audio, to_sr // g, from_sr // g, axis=0)
-
-
-def _build_reference_clip(audio, segs, sr, max_seconds=REFERENCE_CLIP_SECONDS):
-    """Concatenate this speaker's turns (in order) up to max_seconds, for
-    use as the XTTS voice-cloning reference."""
-    max_samples = int(max_seconds * sr)
-    pieces = []
-    total = 0
-    for s in segs:
-        piece = audio[int(s["start_seconds"] * sr):int(s["end_seconds"] * sr)]
-        pieces.append(piece)
-        total += len(piece)
-        if total >= max_samples:
-            break
-    if not pieces:
-        return np.zeros((0, audio.shape[1]), dtype=audio.dtype)
-    return np.concatenate(pieces, axis=0)[:max_samples]
-
-
-def _transcribe(chunk, sr):
-    buf = io.BytesIO()
-    sf.write(buf, chunk, sr, format="WAV")
-    buf.seek(0)
-    resp = requests.post(
-        f"{TTS_URL}/transcribe",
-        files={"file": ("chunk.wav", buf, "audio/wav")},
-        timeout=TTS_TIMEOUT,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data["text"].strip(), data.get("language") or "en"
-
-
-def _clone_speak(reference_bytes, text, language, target_duration, sr, channels):
-    resp = requests.post(
-        f"{TTS_URL}/clone_speak",
-        files={"reference": ("ref.wav", io.BytesIO(reference_bytes), "audio/wav")},
-        data={
-            "text": text,
-            "language": language,
-            "target_duration": max(target_duration, MIN_TARGET_DURATION),
-        },
-        timeout=TTS_TIMEOUT,
-    )
-    resp.raise_for_status()
-    synthesized, synth_sr = sf.read(io.BytesIO(resp.content), always_2d=True)
-    synthesized = _resample(synthesized, synth_sr, sr)
-    if synthesized.shape[1] != channels:
-        # XTTS outputs mono; duplicate to match the original channel count.
-        synthesized = np.repeat(synthesized[:, :1], channels, axis=1)
-    return synthesized
-
-
 def remix_conversation(path, segments, speaker_rates, dest_dir, progress_cb=None):
-    """Rebuild the full conversation. For each speaker whose rate != 1.0,
-    every one of their turns is transcribed and resynthesized in their
-    cloned voice at a calibrated speed (via the isolated tts service) —
-    this regenerates the performance rather than mechanically stretching
-    the recording, which is what actually makes a sped-up/slowed-down
-    speaker sound natural instead of warbly. Turns where transcription
-    comes back empty (non-verbal sounds) or the tts service fails fall
-    back to a plain pitch-preserving time-stretch. Unchanged speakers
-    (rate == 1.0) keep their original audio untouched — no ASR/TTS cost.
-
-    Turn order and the original pause lengths between turns are preserved
-    throughout, with pauses scaled by the surrounding speakers' rates so
-    pacing stays proportional rather than leaving disproportionate dead air.
+    """Rebuild the full conversation, time-stretching each speaker's turns
+    by their given rate (>1 = faster, <1 = slower, 1 = unchanged) while
+    preserving turn order and the original pause lengths between turns.
 
     speaker_rates: {speaker_label: rate}. Speakers not present default to 1.0.
-    progress_cb(done, total), if given, is called as each turn needing
-    regeneration completes — that's the dominant cost, so it's the only
-    useful progress signal.
+    progress_cb is accepted for interface compatibility with the Celery task
+    but unused — a handful of ffmpeg stretch calls complete in seconds, so
+    there's nothing granular worth reporting.
     """
     audio, sr = sf.read(path, always_2d=True)
-    channels = audio.shape[1]
     segments = sorted(segments, key=lambda s: s["start_seconds"])
 
     by_speaker = {}
-    for idx, seg in enumerate(segments):
-        by_speaker.setdefault(seg["speaker"], []).append((idx, seg))
+    for seg in segments:
+        by_speaker.setdefault(seg["speaker"], []).append(seg)
 
-    total_turns = sum(
-        len(segs) for speaker, segs in by_speaker.items()
-        if abs(speaker_rates.get(speaker, 1.0) - 1.0) >= 1e-6
-    )
-    done_turns = 0
-
-    def report():
-        if progress_cb and total_turns > 0:
-            progress_cb(done_turns, total_turns)
-
-    report()
-
-    pieces = [None] * len(segments)
-
-    for speaker, indexed_segs in by_speaker.items():
+    # Stretch each speaker's turns together (one ffmpeg call per speaker) so
+    # their own natural cadence carries through, then slice the result back
+    # into per-turn pieces proportional to each turn's share of that
+    # speaker's total original duration.
+    stretched_chunks = {}
+    for speaker, segs in by_speaker.items():
         factor = speaker_rates.get(speaker, 1.0)
+        raw_chunks = [
+            _fade(audio[int(s["start_seconds"] * sr):int(s["end_seconds"] * sr)], sr)
+            for s in segs
+        ]
+        concatenated = np.concatenate(raw_chunks, axis=0) if raw_chunks else np.zeros((0, audio.shape[1]))
+        stretched = _stretch_audio(concatenated, sr, factor)
 
-        if abs(factor - 1.0) < 1e-6:
-            for idx, s in indexed_segs:
-                pieces[idx] = audio[int(s["start_seconds"] * sr):int(s["end_seconds"] * sr)]
-            continue
+        durations = [s["end_seconds"] - s["start_seconds"] for s in segs]
+        total = sum(durations) or 1.0
+        pieces = []
+        cursor = 0
+        for d in durations:
+            length = int(round(len(stretched) * (d / total)))
+            pieces.append(stretched[cursor:cursor + length])
+            cursor += length
+        stretched_chunks[speaker] = pieces
 
-        reference_clip = _build_reference_clip(audio, [s for _, s in indexed_segs], sr)
-        ref_buf = io.BytesIO()
-        sf.write(ref_buf, reference_clip, sr, format="WAV")
-        reference_bytes = ref_buf.getvalue()
-        language = None
-
-        for idx, s in indexed_segs:
-            original_chunk = audio[int(s["start_seconds"] * sr):int(s["end_seconds"] * sr)]
-            target_duration = (s["end_seconds"] - s["start_seconds"]) / factor
-
-            piece = None
-            try:
-                text, detected_lang = _transcribe(original_chunk, sr)
-                if language is None:
-                    language = detected_lang
-                if text:
-                    piece = _clone_speak(reference_bytes, text, language, target_duration, sr, channels)
-            except Exception as e:
-                print(f"tts: regeneration failed for a turn, falling back to stretch ({e})")
-
-            if piece is None or len(piece) == 0:
-                piece = _stretch_audio(original_chunk, sr, factor)
-
-            pieces[idx] = _fade(piece, sr)
-            done_turns += 1
-            report()
-
-    # Rebuild the timeline: original gaps scaled by the surrounding
-    # speakers' rates (see docstring), each turn replaced by its
-    # regenerated/stretched/original audio.
+    # Rebuild the timeline: each turn replaced by its (possibly stretched)
+    # audio, with the pause before it scaled by the same factor as the
+    # surrounding speakers. A pause is part of the conversation's rhythm —
+    # preserving its absolute length while compressing the speech around it
+    # makes a sped-up speaker sound like they're leaving dead air; scaling
+    # it too keeps the pacing proportional instead.
+    cursors = {speaker: 0 for speaker in by_speaker}
     output_pieces = []
     prev_end = 0.0
     prev_speaker = None
-    for idx, seg in enumerate(segments):
+    for seg in segments:
         gap = max(seg["start_seconds"] - prev_end, 0.0)
         if gap > 0:
             neighbor_rates = [speaker_rates.get(seg["speaker"], 1.0)]
@@ -201,8 +104,10 @@ def remix_conversation(path, segments, speaker_rates, dest_dir, progress_cb=None
                 neighbor_rates.append(speaker_rates.get(prev_speaker, 1.0))
             gap_factor = sum(neighbor_rates) / len(neighbor_rates)
             gap = gap / gap_factor
-            output_pieces.append(np.zeros((int(gap * sr), channels), dtype=audio.dtype))
-        output_pieces.append(pieces[idx])
+            output_pieces.append(np.zeros((int(gap * sr), audio.shape[1]), dtype=audio.dtype))
+        idx = cursors[seg["speaker"]]
+        output_pieces.append(_fade(stretched_chunks[seg["speaker"]][idx], sr))
+        cursors[seg["speaker"]] += 1
         prev_end = seg["end_seconds"]
         prev_speaker = seg["speaker"]
 

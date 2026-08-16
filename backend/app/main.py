@@ -64,6 +64,10 @@ async def upload_audio(
         out.write(content)
     await file.close()
 
+    if tool == "remove-music":
+        task = remove_background_music.delay(str(dest))
+        return JSONResponse({"filename": file.filename, "task_id": task.id})
+
     task = process_audio.delay(str(dest), num_speakers)
     return JSONResponse({"filename": file.filename, "task_id": task.id})
 
@@ -133,9 +137,31 @@ def download_speaker_track(task_id: str, speaker: str):
 def process_audio(path: str, num_speakers: Optional[int] = None):
     try:
         from app.diarization import diarize, extract_speaker_tracks
+        try:
+            from app.separate_vocals import separate_vocals
+            path = separate_vocals(path, DATA_DIR)
+        except Exception as e:
+            print(f"separate_vocals: failed, continuing without it ({e})")
+        try:
+            from app.denoise import denoise_file
+            path = denoise_file(path, DATA_DIR)
+        except Exception as e:
+            print(f"denoise: failed, continuing with original audio ({e})")
         segments = diarize(path, num_speakers=num_speakers)
         speaker_files = extract_speaker_tracks(path, segments, DATA_DIR)
         return {"path": path, "segments": segments, "speaker_files": speaker_files}
+    except Exception as e:
+        return {"path": path, "error": str(e)}
+
+
+@celery.task(name="remove_background_music")
+def remove_background_music(path: str):
+    try:
+        from app.separate_vocals import separate_vocals
+        from app.denoise import denoise_file
+        cleaned = separate_vocals(path, DATA_DIR)
+        cleaned = denoise_file(cleaned, DATA_DIR)
+        return {"path": cleaned, "filename": Path(cleaned).name}
     except Exception as e:
         return {"path": path, "error": str(e)}
 

@@ -34,16 +34,8 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - HF_TOKEN=${HF_TOKEN}
-      - TTS_URL=http://tts:8200
     depends_on:
       - redis
-      - tts
-
-  tts:
-    build: ./backend/tts
-    volumes:
-      - tts-model-cache:/root/.local/share/tts
-      - whisper-cache:/root/.cache/huggingface
 
   frontend:
     build: ./frontend
@@ -54,5 +46,3 @@ services:
 
 volumes:
   hf-cache:
-  tts-model-cache:
-  whisper-cache:

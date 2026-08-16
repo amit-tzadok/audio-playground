@@ -9,6 +9,7 @@ const TOOLS = [
   { id: 'visualization', name: '📊 Speech Visualization', desc: 'Visualize audio waveforms and spectrograms' },
   { id: 'fundamental-freq', name: '🎵 Fundamental Frequency', desc: 'Analyze pitch and F0 contours' },
   { id: 'speaker-diarization', name: '🗣 Speaker Diarization', desc: 'Detect who spoke when in an audio file' },
+  { id: 'remove-music', name: '🎶 Remove Background Music', desc: 'Isolate speech and remove background music or noise from an audio file' },
 ]
 
 export default function App() {
@@ -201,6 +202,13 @@ export default function App() {
                         <a href={`/api/download/${task}`} download={result.filename}>
                           ⬇ Download {result.filename}
                         </a>
+                      ) : selectedTool === 'remove-music' && result.path && !result.error ? (
+                        <div className="remix-result">
+                          <audio controls src={`/api/download/${task}`} className="diarization-audio" />
+                          <a href={`/api/download/${task}`} download={result.filename}>
+                            ⬇ Download {result.filename}
+                          </a>
+                        </div>
                       ) : selectedTool === 'speaker-diarization' && result.segments && !result.error ? (
                         <SpeakerDiarizationResult task={task} result={result} />
                       ) : (
