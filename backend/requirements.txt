@@ -12,3 +12,4 @@ anthropic
 requests
 noisereduce
 demucs
+faster-whisper

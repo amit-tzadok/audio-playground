@@ -1,7 +1,25 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import * as Tone from 'tone'
+import iconPitch from './assets/icons/pitch.svg'
+import GlassButton from './GlassButton'
 
-export default function PitchShifter({ onBack }) {
+// Typical speech/music samples sit well under +/-1, so raw amplitude reads
+// as a near-flat line — boost visually (and clamp so peaks don't clip).
+const WAVEFORM_GAIN = 3.5
+const SPECTRUM_GAIN = 7
+
+// Tone.PitchShift's delay-line/LFO algorithm computes an LFO modulation
+// frequency of exactly 0 Hz at pitch=0 semitones, which freezes its
+// crossfade/delay state and produces silence instead of a passthrough.
+// Since 0 semitones needs no processing anyway, bypass the effect via its
+// wet control rather than routing audio through the broken zero case.
+function applyPitch(pitchShiftNode, semitones) {
+  if (!pitchShiftNode) return
+  pitchShiftNode.pitch = semitones
+  pitchShiftNode.wet.value = semitones === 0 ? 0 : 1
+}
+
+export default function PitchShifter({ onBack, autoLoadUrl }) {
   const [file, setFile] = useState(null)
   const [fileName, setFileName] = useState('')
   const [isPlaying, setIsPlaying] = useState(false)
@@ -9,6 +27,7 @@ export default function PitchShifter({ onBack }) {
   const [pitch, setPitch] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [audioError, setAudioError] = useState(null)
 
   const playerRef = useRef(null)
   const pitchShiftRef = useRef(null)
@@ -44,27 +63,37 @@ export default function PitchShifter({ onBack }) {
     if (pitchShiftRef.current) pitchShiftRef.current.dispose()
     if (analyserRef.current) analyserRef.current.dispose()
 
-    await Tone.start()
+    try {
+      await Tone.start()
 
-    const url = URL.createObjectURL(audioFile)
+      const url = URL.createObjectURL(audioFile)
 
-    const pitchShift = new Tone.PitchShift({ pitch: pitch }).toDestination()
-    pitchShiftRef.current = pitchShift
+      const pitchShift = new Tone.PitchShift({ pitch: pitch }).toDestination()
+      applyPitch(pitchShift, pitch)
+      pitchShiftRef.current = pitchShift
 
-    const analyser = new Tone.Analyser('waveform', 2048)
-    analyserRef.current = analyser
-    pitchShift.connect(analyser)
+      const analyser = new Tone.Analyser('waveform', 2048)
+      analyserRef.current = analyser
+      pitchShift.connect(analyser)
 
-    const player = new Tone.Player({
-      url,
-      onload: () => {
-        setDuration(player.buffer.duration)
-        setIsLoaded(true)
-        drawStaticWaveform(player.buffer)
-      },
-    }).connect(pitchShift)
+      const player = new Tone.Player({
+        url,
+        onload: () => {
+          setDuration(player.buffer.duration)
+          setIsLoaded(true)
+          drawStaticWaveform(player.buffer)
+        },
+        onerror: (err) => {
+          console.error('[PitchShifter] Player failed to load:', err)
+          setAudioError('Failed to decode this audio file: ' + err)
+        },
+      }).connect(pitchShift)
 
-    playerRef.current = player
+      playerRef.current = player
+    } catch (err) {
+      console.error('[PitchShifter] loadAudio failed:', err)
+      setAudioError('Failed to set up audio: ' + err.message)
+    }
   }, [pitch])
 
   function handleFileChange(e) {
@@ -75,43 +104,71 @@ export default function PitchShifter({ onBack }) {
     setIsLoaded(false)
     setIsPlaying(false)
     setCurrentTime(0)
+    setAudioError(null)
     cancelAnimationFrame(animFrameRef.current)
     clearInterval(timeIntervalRef.current)
     loadAudio(f)
   }
 
+  // Pre-load the bundled demo clip when launched from the "try it" strip,
+  // same path as picking a file manually just without the file picker.
+  useEffect(() => {
+    if (!autoLoadUrl) return
+    let cancelled = false
+    fetch(autoLoadUrl)
+      .then((r) => r.blob())
+      .then((blob) => {
+        if (cancelled) return
+        setFile(blob)
+        setFileName('demo-sample.mp3')
+        setIsLoaded(false)
+        setAudioError(null)
+        loadAudio(blob)
+      })
+      .catch((err) => setAudioError('Failed to load demo sample: ' + err.message))
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoLoadUrl])
+
   function handlePitchChange(e) {
     const val = parseFloat(e.target.value)
     setPitch(val)
-    if (pitchShiftRef.current) {
-      pitchShiftRef.current.pitch = val
-    }
+    applyPitch(pitchShiftRef.current, val)
   }
 
   async function togglePlayback() {
     if (!isLoaded) return
-    await Tone.start()
+    setAudioError(null)
 
-    if (isPlaying) {
-      stopPlayback()
-    } else {
-      playerRef.current.start()
-      setIsPlaying(true)
-      startTimeRef.current = Tone.now()
+    try {
+      await Tone.start()
 
-      // Track time
-      timeIntervalRef.current = setInterval(() => {
-        const elapsed = Tone.now() - startTimeRef.current
-        if (elapsed >= duration) {
-          stopPlayback()
-          setCurrentTime(0)
-        } else {
-          setCurrentTime(elapsed)
-        }
-      }, 50)
+      if (isPlaying) {
+        stopPlayback()
+      } else {
+        playerRef.current.start()
+        setIsPlaying(true)
+        startTimeRef.current = Tone.now()
 
-      // Start visualization loop
-      drawLive()
+        // Track time
+        timeIntervalRef.current = setInterval(() => {
+          const elapsed = Tone.now() - startTimeRef.current
+          if (elapsed >= duration) {
+            stopPlayback()
+            setCurrentTime(0)
+          } else {
+            setCurrentTime(elapsed)
+          }
+        }, 50)
+
+        // Start visualization loop
+        drawLive()
+      }
+    } catch (err) {
+      console.error('[PitchShifter] togglePlayback failed:', err)
+      setAudioError('Playback failed: ' + err.message)
     }
   }
 
@@ -136,16 +193,18 @@ export default function PitchShifter({ onBack }) {
     ctx.clearRect(0, 0, w, h)
 
     // Background
-    ctx.fillStyle = '#1a202c'
+    ctx.fillStyle = '#0f1420'
     ctx.fillRect(0, 0, w, h)
 
-    // Waveform
+    // Waveform — real-world speech/music rarely swings near +/-1, so the
+    // raw samples read as a near-flat line; boost visually and clamp.
+    const GAIN = WAVEFORM_GAIN
     ctx.beginPath()
-    ctx.strokeStyle = '#667eea'
+    ctx.strokeStyle = '#818cf8'
     ctx.lineWidth = 1.5
     for (let i = 0; i < w; i++) {
       const idx = i * step
-      const val = data[idx] || 0
+      const val = Math.max(-1, Math.min(1, (data[idx] || 0) * GAIN))
       const y = (1 - val) * h / 2
       if (i === 0) ctx.moveTo(i, y)
       else ctx.lineTo(i, y)
@@ -156,9 +215,9 @@ export default function PitchShifter({ onBack }) {
     const specCanvas = spectrumCanvasRef.current
     if (specCanvas) {
       const sctx = specCanvas.getContext('2d')
-      sctx.fillStyle = '#1a202c'
+      sctx.fillStyle = '#0f1420'
       sctx.fillRect(0, 0, specCanvas.width, specCanvas.height)
-      sctx.fillStyle = '#4a5568'
+      sctx.fillStyle = '#7b869f'
       sctx.font = '14px sans-serif'
       sctx.textAlign = 'center'
       sctx.fillText('Frequency spectrum will appear during playback', specCanvas.width / 2, specCanvas.height / 2)
@@ -182,11 +241,12 @@ export default function PitchShifter({ onBack }) {
     function loop() {
       // Waveform
       const waveform = analyserRef.current.getValue()
-      wCtx.fillStyle = '#1a202c'
+
+      wCtx.fillStyle = '#0f1420'
       wCtx.fillRect(0, 0, w, h)
 
       // Grid lines
-      wCtx.strokeStyle = '#2d3748'
+      wCtx.strokeStyle = '#232a3d'
       wCtx.lineWidth = 0.5
       for (let i = 0; i < 5; i++) {
         const y = (h / 4) * i
@@ -198,16 +258,16 @@ export default function PitchShifter({ onBack }) {
 
       // Waveform line
       const gradient = wCtx.createLinearGradient(0, 0, w, 0)
-      gradient.addColorStop(0, '#667eea')
-      gradient.addColorStop(0.5, '#764ba2')
-      gradient.addColorStop(1, '#667eea')
+      gradient.addColorStop(0, '#818cf8')
+      gradient.addColorStop(0.5, '#a5b4fc')
+      gradient.addColorStop(1, '#818cf8')
       wCtx.beginPath()
       wCtx.strokeStyle = gradient
       wCtx.lineWidth = 2
       const sliceWidth = w / waveform.length
       let x = 0
       for (let i = 0; i < waveform.length; i++) {
-        const val = waveform[i]
+        const val = Math.max(-1, Math.min(1, waveform[i] * WAVEFORM_GAIN))
         const y = (1 - val) * h / 2
         if (i === 0) wCtx.moveTo(x, y)
         else wCtx.lineTo(x, y)
@@ -220,11 +280,11 @@ export default function PitchShifter({ onBack }) {
 
       // Spectrum - use a separate FFT analyser
       // We'll compute a basic FFT visualization from the waveform data
-      sCtx.fillStyle = '#1a202c'
+      sCtx.fillStyle = '#0f1420'
       sCtx.fillRect(0, 0, sw, sh)
 
       // Grid lines for spectrum
-      sCtx.strokeStyle = '#2d3748'
+      sCtx.strokeStyle = '#232a3d'
       sCtx.lineWidth = 0.5
       for (let i = 0; i < 5; i++) {
         const y = (sh / 4) * i
@@ -239,9 +299,9 @@ export default function PitchShifter({ onBack }) {
       const numBars = 64
       const barWidth = sw / numBars - 2
       const specGradient = sCtx.createLinearGradient(0, sh, 0, 0)
-      specGradient.addColorStop(0, '#667eea')
-      specGradient.addColorStop(0.5, '#764ba2')
-      specGradient.addColorStop(1, '#e53e3e')
+      specGradient.addColorStop(0, '#6366f1')
+      specGradient.addColorStop(0.5, '#a5b4fc')
+      specGradient.addColorStop(1, '#f472b6')
 
       for (let b = 0; b < numBars; b++) {
         // Map bar to frequency range
@@ -252,19 +312,21 @@ export default function PitchShifter({ onBack }) {
           sum += Math.abs(waveform[i] || 0)
         }
         const avg = sum / Math.max(1, endIdx - startIdx)
-        const barHeight = avg * sh * 3
+        // sqrt compresses the dynamic range so quieter bars still read
+        // as visible bars instead of disappearing near the baseline.
+        const barHeight = Math.min(sh, Math.sqrt(avg * SPECTRUM_GAIN) * sh)
 
         const x = b * (barWidth + 2) + 1
         sCtx.fillStyle = specGradient
         sCtx.fillRect(x, sh - barHeight, barWidth, barHeight)
 
         // Bar reflection
-        sCtx.fillStyle = 'rgba(102, 126, 234, 0.1)'
+        sCtx.fillStyle = 'rgba(129, 140, 248, 0.12)'
         sCtx.fillRect(x, sh - barHeight - 2, barWidth, 2)
       }
 
       // Frequency labels
-      sCtx.fillStyle = '#4a5568'
+      sCtx.fillStyle = '#7b869f'
       sCtx.font = '10px sans-serif'
       sCtx.textAlign = 'center'
       const freqLabels = ['0', '1k', '2k', '4k', '8k', '16k']
@@ -293,9 +355,10 @@ export default function PitchShifter({ onBack }) {
   return (
     <div>
       <div className="tool-header">
-        <button className="back-button" onClick={onBack}>
-          ← Back to Tools
-        </button>
+        <GlassButton variant="pill" onClick={onBack}>← Back to Tools</GlassButton>
+        <div className="tool-header-icon">
+          <img src={iconPitch} alt="" className="tool-icon-img" />
+        </div>
         <h2>Voice Pitch Changer</h2>
       </div>
 
@@ -313,6 +376,7 @@ export default function PitchShifter({ onBack }) {
             <span>{file ? fileName : 'Choose an audio file or drag it here'}</span>
           </label>
         </div>
+        {audioError && <p className="remix-error">⚠ {audioError}</p>}
       </div>
 
       {isLoaded && (
@@ -350,35 +414,35 @@ export default function PitchShifter({ onBack }) {
               { label: 'High', val: 3 },
               { label: 'Chipmunk', val: 8 },
             ].map((p) => (
-              <button
+              <GlassButton
                 key={p.label}
-                className={`preset-btn ${pitch === p.val ? 'active' : ''}`}
+                variant="pill"
+                active={pitch === p.val}
+                className="preset-btn-glass"
                 onClick={() => {
                   setPitch(p.val)
-                  if (pitchShiftRef.current) pitchShiftRef.current.pitch = p.val
+                  applyPitch(pitchShiftRef.current, p.val)
                 }}
               >
                 {p.label}
-              </button>
+              </GlassButton>
             ))}
           </div>
 
           {/* Playback controls */}
           <div className="playback-row">
-            <button className="play-btn" onClick={togglePlayback}>
+            <GlassButton variant="cta" className="play-btn-glass" onClick={togglePlayback}>
               {isPlaying ? '⏹ Stop' : '▶ Play'}
-            </button>
+            </GlassButton>
+            <div className="progress-bar-track">
+              <div
+                className="progress-bar-fill"
+                style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+              />
+            </div>
             <div className="time-display">
               {formatTime(currentTime)} / {formatTime(duration)}
             </div>
-          </div>
-
-          {/* Progress bar */}
-          <div className="progress-bar-track">
-            <div
-              className="progress-bar-fill"
-              style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-            />
           </div>
 
           {/* Visualization */}
@@ -387,8 +451,8 @@ export default function PitchShifter({ onBack }) {
               <h3 className="viz-title">Waveform</h3>
               <canvas
                 ref={waveformCanvasRef}
-                width={700}
-                height={150}
+                width={900}
+                height={240}
                 className="viz-canvas"
               />
             </div>
@@ -396,8 +460,8 @@ export default function PitchShifter({ onBack }) {
               <h3 className="viz-title">Frequency Spectrum</h3>
               <canvas
                 ref={spectrumCanvasRef}
-                width={700}
-                height={150}
+                width={900}
+                height={240}
                 className="viz-canvas"
               />
             </div>

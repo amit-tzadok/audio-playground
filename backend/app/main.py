@@ -68,6 +68,18 @@ async def upload_audio(
         task = remove_background_music.delay(str(dest))
         return JSONResponse({"filename": file.filename, "task_id": task.id})
 
+    if tool == "visualization":
+        task = analyze_visualization.delay(str(dest))
+        return JSONResponse({"filename": file.filename, "task_id": task.id})
+
+    if tool == "audio2text":
+        task = transcribe_audio_task.delay(str(dest))
+        return JSONResponse({"filename": file.filename, "task_id": task.id})
+
+    if tool == "fundamental-freq":
+        task = analyze_fundamental_freq.delay(str(dest))
+        return JSONResponse({"filename": file.filename, "task_id": task.id})
+
     task = process_audio.delay(str(dest), num_speakers)
     return JSONResponse({"filename": file.filename, "task_id": task.id})
 
@@ -162,6 +174,36 @@ def remove_background_music(path: str):
         cleaned = separate_vocals(path, DATA_DIR)
         cleaned = denoise_file(cleaned, DATA_DIR)
         return {"path": cleaned, "filename": Path(cleaned).name}
+    except Exception as e:
+        return {"path": path, "error": str(e)}
+
+
+@celery.task(name="analyze_visualization")
+def analyze_visualization(path: str):
+    try:
+        from app.visualize import analyze_audio
+        analysis = analyze_audio(path)
+        return {"path": path, "filename": Path(path).name, **analysis}
+    except Exception as e:
+        return {"path": path, "error": str(e)}
+
+
+@celery.task(name="transcribe_audio_task")
+def transcribe_audio_task(path: str):
+    try:
+        from app.transcribe import transcribe_audio
+        transcript = transcribe_audio(path)
+        return {"path": path, "filename": Path(path).name, **transcript}
+    except Exception as e:
+        return {"path": path, "error": str(e)}
+
+
+@celery.task(name="analyze_fundamental_freq")
+def analyze_fundamental_freq(path: str):
+    try:
+        from app.fundamental_freq import estimate_f0
+        analysis = estimate_f0(path)
+        return {"path": path, "filename": Path(path).name, **analysis}
     except Exception as e:
         return {"path": path, "error": str(e)}
 

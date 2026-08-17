@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import GlassButton from './GlassButton'
+import CircularProgress from './CircularProgress'
 
 // Fixed-order categorical palette (colorblind-validated), assigned to
 // speakers in order of first appearance — never cycled per-render.
@@ -42,6 +44,8 @@ export default function SpeakerDiarizationResult({ task, result }) {
   const [remixStatus, setRemixStatus] = useState(null)
   const [remixResult, setRemixResult] = useState(null)
   const [remixing, setRemixing] = useState(false)
+  const [remixStartedAt, setRemixStartedAt] = useState(null)
+  const [remixElapsed, setRemixElapsed] = useState(0)
 
   const [instruction, setInstruction] = useState('')
   const [interpreting, setInterpreting] = useState(false)
@@ -65,6 +69,27 @@ export default function SpeakerDiarizationResult({ task, result }) {
     }
     return () => clearInterval(iv)
   }, [remixTask, remixStatus])
+
+  useEffect(() => {
+    let iv
+    if (remixStartedAt && remixStatus !== 'SUCCESS' && remixStatus !== 'FAILURE') {
+      iv = setInterval(() => {
+        setRemixElapsed((Date.now() - remixStartedAt) / 1000)
+      }, 300)
+    }
+    return () => clearInterval(iv)
+  }, [remixStartedAt, remixStatus])
+
+  // Remix is a fast DSP-only pass (no ML model), so ease toward a cap on
+  // elapsed time alone when there's no granular current/total to report,
+  // rather than leaving the ring just spinning with no sense of progress.
+  function getRemixPercent() {
+    if (remixStatus === 'PROGRESS' && remixResult && remixResult.total > 0) {
+      return (remixResult.current / remixResult.total) * 100
+    }
+    const timeConstant = 3
+    return Math.min(96, 100 * (1 - Math.exp(-remixElapsed / timeConstant)))
+  }
 
   function seekTo(seconds) {
     if (audioRef.current) {
@@ -116,6 +141,8 @@ export default function SpeakerDiarizationResult({ task, result }) {
       const j = await res.json()
       setRemixTask(j.task_id)
       setRemixStatus('PENDING')
+      setRemixStartedAt(Date.now())
+      setRemixElapsed(0)
     } catch (err) {
       alert('Rebuild failed: ' + err.message)
     } finally {
@@ -184,9 +211,14 @@ export default function SpeakerDiarizationResult({ task, result }) {
             onKeyDown={(e) => e.key === 'Enter' && interpretInstruction()}
             className="url-input instruction-input"
           />
-          <button onClick={interpretInstruction} disabled={interpreting || !instruction.trim()} className="instruction-button">
+          <GlassButton
+            variant="pill"
+            onClick={interpretInstruction}
+            disabled={interpreting || !instruction.trim()}
+            className="instruction-button-glass"
+          >
             {interpreting ? <span className="loader"></span> : 'Interpret'}
-          </button>
+          </GlassButton>
         </div>
         {interpretExplanation && needsClarification && (
           <p className="instruction-clarification">❓ {interpretExplanation}</p>
@@ -214,29 +246,28 @@ export default function SpeakerDiarizationResult({ task, result }) {
             <span className="pace-value">{(speakerRates[sp] ?? 1).toFixed(2)}x ({paceLabel(speakerRates[sp] ?? 1)})</span>
           </div>
         ))}
-        <button onClick={rebuildConversation} disabled={remixing || (remixTask && remixStatus !== 'SUCCESS' && remixStatus !== 'FAILURE')}>
-          {remixing || (remixTask && remixStatus !== 'SUCCESS' && remixStatus !== 'FAILURE') ? (
-            <>Rebuilding conversation... <span className="loader"></span></>
-          ) : (
-            '🔀 Rebuild conversation with these speeds'
-          )}
-        </button>
+        <div className="glass-cta-row">
+          <GlassButton
+            variant="cta"
+            onClick={rebuildConversation}
+            disabled={remixing || (remixTask && remixStatus !== 'SUCCESS' && remixStatus !== 'FAILURE')}
+          >
+            {remixing || (remixTask && remixStatus !== 'SUCCESS' && remixStatus !== 'FAILURE') ? (
+              <>Rebuilding conversation... <span className="loader"></span></>
+            ) : (
+              '🔀 Rebuild conversation with these speeds'
+            )}
+          </GlassButton>
+        </div>
 
         {remixTask && remixStatus !== 'SUCCESS' && remixStatus !== 'FAILURE' && (
           <div className="remix-progress">
+            <CircularProgress percent={getRemixPercent()} size={40} strokeWidth={5} showLabel={false} />
             {remixStatus === 'PROGRESS' && remixResult && remixResult.total > 0 ? (
-              <>
-                <div className="remix-progress-track">
-                  <div
-                    className="remix-progress-fill"
-                    style={{ width: `${Math.min(100, (remixResult.current / remixResult.total) * 100)}%` }}
-                  />
-                </div>
-                <span className="remix-progress-label">
-                  Regenerating speech: turn {remixResult.current} of {remixResult.total}
-                  {' '}({Math.round((remixResult.current / remixResult.total) * 100)}%)
-                </span>
-              </>
+              <span className="remix-progress-label">
+                Regenerating speech: turn {remixResult.current} of {remixResult.total}
+                {' '}({Math.round((remixResult.current / remixResult.total) * 100)}%)
+              </span>
             ) : (
               <span className="remix-progress-label">{remixStatus === 'STARTED' ? 'Transcribing and cloning voice…' : 'Queued…'}</span>
             )}
