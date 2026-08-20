@@ -76,39 +76,47 @@ export default function DemoSection({ tools, onTry, loadingTool }) {
   return (
     <div className="demo-section">
       <div className="demo-section-head">
-        <span className="demo-section-title">Live demo</span>
-        <span className="demo-section-desc">A real ~25s clip — press play to preview it, or jump straight into any tool below with zero setup.</span>
+        <h2 className="demo-section-title">Live Demo</h2>
+        <p className="demo-section-desc">No file of your own yet? Use this sample clip to try any tool right now — nothing to upload.</p>
       </div>
-      <div className="demo-player">
-        <GlassButton variant="pill" onClick={togglePlay}>
-          {isPlaying ? '⏹ Stop' : '▶ Preview'}
-        </GlassButton>
-        <canvas ref={canvasRef} width={640} height={56} className="demo-canvas" />
-      </div>
-      <audio
-        ref={audioRef}
-        src={DEMO_URL}
-        preload="metadata"
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={() => setIsPlaying(false)}
-        onTimeUpdate={(e) => setCurrentTime(e.target.currentTime)}
-        onLoadedMetadata={(e) => setDuration(e.target.duration)}
-      />
 
-      <div className="demo-try-row">
-        {tools.map((tool) => (
-          <button
-            key={tool.id}
-            type="button"
-            className="demo-try-chip"
-            onClick={() => onTry(tool.id)}
-            disabled={loadingTool === tool.id}
-          >
-            <img src={tool.icon} alt="" className="demo-try-chip-icon" />
-            <span>{loadingTool === tool.id ? 'Loading…' : tool.name}</span>
-          </button>
-        ))}
+      <div className="demo-block">
+        <span className="demo-block-label">1 · Hear the sample</span>
+        <div className="demo-player">
+          <GlassButton variant="pill" onClick={togglePlay}>
+            {isPlaying ? '⏹ Stop' : '▶ Play sample'}
+          </GlassButton>
+          <canvas ref={canvasRef} width={640} height={56} className="demo-canvas" />
+        </div>
+        <audio
+          ref={audioRef}
+          src={DEMO_URL}
+          preload="metadata"
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
+          onTimeUpdate={(e) => setCurrentTime(e.target.currentTime)}
+          onLoadedMetadata={(e) => setDuration(e.target.duration)}
+        />
+      </div>
+
+      <div className="demo-block demo-block-last">
+        <span className="demo-block-label">2 · Pick a tool to run on it</span>
+        <div className="demo-try-row">
+          {tools.map((tool) => (
+            <button
+              key={tool.id}
+              type="button"
+              className="demo-try-chip"
+              onClick={() => onTry(tool.id)}
+              disabled={loadingTool === tool.id}
+            >
+              <img src={tool.icon} alt="" className="demo-try-chip-icon" />
+              <span>{loadingTool === tool.id ? 'Loading…' : tool.name}</span>
+              <span className="demo-try-chip-arrow" aria-hidden="true">→</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )

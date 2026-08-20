@@ -1,0 +1,9 @@
+# Copy this to terraform.tfvars (gitignored) and fill in real values.
+# Never commit terraform.tfvars — it holds your actual secrets.
+
+hf_token          = "hf_xxx"
+anthropic_api_key = "sk-ant-xxx"
+
+# Generate with: htpasswd -nB <username>
+# (brew install httpd if you don't have htpasswd)
+basic_auth_htpasswd = "demo:$2y$05$REPLACE_ME_WITH_REAL_HASH"

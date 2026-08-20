@@ -63,6 +63,7 @@ export default function App() {
   const [elapsed, setElapsed] = useState(0)
   const [demoAutoLoad, setDemoAutoLoad] = useState(false)
   const [demoLoadingTool, setDemoLoadingTool] = useState(null)
+  const [inputMode, setInputMode] = useState('file')
 
   useEffect(() => {
     let iv
@@ -135,14 +136,21 @@ export default function App() {
     return Math.min(96, 100 * (1 - Math.exp(-elapsed / timeConstant)))
   }
 
+  function usingUrlMode(tool, hasFileOverride) {
+    if (hasFileOverride) return false
+    return tool === 'url2wav' || inputMode === 'url'
+  }
+
   async function processAudio(fileOverride, toolOverride) {
     const activeTool = toolOverride || selectedTool
     const activeFile = fileOverride || file
-    if (activeTool === 'url2wav' && !url) {
+    const viaUrl = usingUrlMode(activeTool, !!fileOverride)
+
+    if (viaUrl && !url) {
       alert('Please enter a URL')
       return
     }
-    if (activeTool !== 'url2wav' && !activeFile) {
+    if (!viaUrl && !activeFile) {
       alert('Please select a file')
       return
     }
@@ -150,9 +158,12 @@ export default function App() {
     setUploading(true)
     try {
       const fd = new FormData()
-      if (activeFile) fd.append('file', activeFile)
       fd.append('tool', activeTool)
-      if (url) fd.append('url', url)
+      if (viaUrl) {
+        fd.append('url', url)
+      } else {
+        fd.append('file', activeFile)
+      }
       if (activeTool === 'speaker-diarization' && numSpeakers) fd.append('num_speakers', numSpeakers)
 
       const res = await fetch('/api/upload', { method: 'POST', body: fd })
@@ -211,6 +222,7 @@ export default function App() {
     setTaskStartedAt(null)
     setElapsed(0)
     setDemoAutoLoad(false)
+    setInputMode('file')
   }
 
   function getProcessingLabel(s, res) {
@@ -257,11 +269,29 @@ export default function App() {
             </div>
 
             <div className="upload-section">
-              {selectedTool === 'url2wav' ? (
+              {selectedTool !== 'url2wav' && (
+                <div className="input-mode-toggle">
+                  <button
+                    type="button"
+                    className={inputMode === 'file' ? 'active' : ''}
+                    onClick={() => setInputMode('file')}
+                  >
+                    📁 Upload a file
+                  </button>
+                  <button
+                    type="button"
+                    className={inputMode === 'url' ? 'active' : ''}
+                    onClick={() => setInputMode('url')}
+                  >
+                    🔗 Paste a YouTube URL
+                  </button>
+                </div>
+              )}
+              {selectedTool === 'url2wav' || inputMode === 'url' ? (
                 <div className="url-input-wrapper">
                   <input
                     type="text"
-                    placeholder="Enter audio URL (e.g., https://example.com/audio.mp3)"
+                    placeholder="Paste a YouTube (or any yt-dlp-supported) URL"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     className="url-input"
@@ -297,7 +327,7 @@ export default function App() {
                 <GlassButton
                   variant="cta"
                   onClick={processAudio}
-                  disabled={(selectedTool !== 'url2wav' && !file) || (selectedTool === 'url2wav' && !url) || uploading}
+                  disabled={(usingUrlMode(selectedTool, false) ? !url : !file) || uploading}
                 >
                   {uploading ? (
                     <>

@@ -116,6 +116,19 @@ body::before {
   z-index: 0;
 }
 
+@media (prefers-color-scheme: dark) {
+  body {
+    background: linear-gradient(135deg, #0a1614 0%, #0b0e16 45%, #170f0a 100%);
+  }
+
+  body::before {
+    background:
+      radial-gradient(circle at 10% 5%, rgba(255, 255, 255, 0.03), transparent 45%),
+      radial-gradient(circle at 92% 10%, rgba(45, 212, 191, 0.16), transparent 45%),
+      radial-gradient(circle at 20% 95%, rgba(251, 191, 145, 0.12), transparent 50%);
+  }
+}
+
 @keyframes gradientDrift {
   0% { background-position: 0% 30%; }
   50% { background-position: 100% 70%; }
@@ -175,39 +188,67 @@ h1 {
 .subtitle {
   color: var(--color-text-muted);
   font-size: 15px;
-  margin-bottom: 36px;
+  margin-bottom: 28px;
   text-align: center;
 }
 
 .demo-section {
   background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur-soft);
-  -webkit-backdrop-filter: var(--glass-blur-soft);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--glass-border);
-  border-radius: var(--radius-md);
-  padding: 18px 22px;
-  margin-bottom: 24px;
+  border-radius: var(--radius-lg);
+  padding: 24px 26px;
+  margin-bottom: 32px;
+  box-shadow: var(--shadow-md);
 }
 
 .demo-section-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--glass-border);
 }
 
 .demo-section-title {
-  font-size: 11px;
+  font-size: 19px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-accent);
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+
+.demo-section-title::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  margin-right: 8px;
+  box-shadow: 0 0 0 4px var(--color-accent-soft);
 }
 
 .demo-section-desc {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--color-text-muted);
+}
+
+.demo-block {
+  margin-bottom: 18px;
+}
+
+.demo-block-last {
+  margin-bottom: 0;
+}
+
+.demo-block-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+  margin-bottom: 10px;
 }
 
 .demo-player {
@@ -226,9 +267,6 @@ h1 {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--glass-border);
 }
 
 .demo-try-chip {
@@ -236,23 +274,28 @@ h1 {
   align-items: center;
   gap: 7px;
   width: auto;
-  padding: 7px 14px 7px 9px;
-  font-size: 12px;
+  padding: 8px 12px 8px 10px;
+  font-size: 12.5px;
   font-weight: 600;
-  color: var(--color-text-muted);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-full);
   cursor: pointer;
   box-shadow: none;
-  transition: border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
 }
 
 .demo-try-chip:hover:not(:disabled) {
-  border-color: var(--color-accent-border);
-  color: var(--color-text);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
   transform: translateY(-1px);
-  box-shadow: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.demo-try-chip:hover:not(:disabled) .demo-try-chip-icon {
+  filter: brightness(0) invert(1);
 }
 
 .demo-try-chip:disabled {
@@ -265,6 +308,17 @@ h1 {
   height: 14px;
   object-fit: contain;
   opacity: 0.85;
+}
+
+.demo-try-chip-arrow {
+  opacity: 0.5;
+  font-size: 11px;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.demo-try-chip:hover:not(:disabled) .demo-try-chip-arrow {
+  opacity: 1;
+  transform: translateX(2px);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -386,6 +440,36 @@ h1 {
 
 .upload-section {
   margin-bottom: 28px;
+}
+
+.input-mode-toggle {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 14px;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+.input-mode-toggle button {
+  width: auto;
+  padding: 8px 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  box-shadow: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.input-mode-toggle button.active {
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sm);
 }
 
 .url-input-wrapper {
@@ -536,11 +620,6 @@ h1 {
   .glass-btn:hover:not(:disabled) {
     background: linear-gradient(135deg, rgba(42, 49, 76, 0.78), rgba(42, 49, 76, 0.4));
   }
-
-  .glass-btn-label {
-    color: var(--color-text);
-    text-shadow: none;
-  }
 }
 
 .glass-btn-label {
@@ -555,6 +634,15 @@ h1 {
 
 .glass-btn--cta .glass-btn-label {
   font-size: 15px;
+}
+
+/* Must come after the base .glass-btn-label rule above — same specificity,
+   so declaration order decides the winner, not just the media query. */
+@media (prefers-color-scheme: dark) {
+  .glass-btn-label {
+    color: var(--color-text);
+    text-shadow: none;
+  }
 }
 
 .glass-cta-row {

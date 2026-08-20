@@ -5,3 +5,12 @@ audio/tests/recordings/mika_and_amit.wav
 Mika and Amit.m4a
 .env
 k8s/secret.yaml
+
+# Terraform state/vars can contain secret values in plain text.
+# (.terraform.lock.hcl is intentionally NOT ignored — it should be committed.)
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+terraform/crash.log

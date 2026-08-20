@@ -28,6 +28,9 @@ export default function PitchShifter({ onBack, autoLoadUrl }) {
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [audioError, setAudioError] = useState(null)
+  const [inputMode, setInputMode] = useState('file')
+  const [url, setUrl] = useState('')
+  const [urlLoading, setUrlLoading] = useState(false)
 
   const playerRef = useRef(null)
   const pitchShiftRef = useRef(null)
@@ -108,6 +111,55 @@ export default function PitchShifter({ onBack, autoLoadUrl }) {
     cancelAnimationFrame(animFrameRef.current)
     clearInterval(timeIntervalRef.current)
     loadAudio(f)
+  }
+
+  // Download a YouTube (or any yt-dlp-supported) URL server-side via the
+  // same url2wav pipeline, then pull the resulting WAV down and feed it
+  // into the normal client-side loadAudio path — the backend never needs
+  // to know this is headed for the pitch shifter.
+  async function loadFromUrl() {
+    if (!url.trim() || urlLoading) return
+    setUrlLoading(true)
+    setAudioError(null)
+    try {
+      const fd = new FormData()
+      fd.append('url', url)
+      fd.append('tool', 'url2wav')
+      const res = await fetch('/api/upload', { method: 'POST', body: fd })
+      const { task_id: taskId } = await res.json()
+      if (!taskId) throw new Error('Upload did not return a task')
+
+      let result = null
+      for (let i = 0; i < 90; i++) {
+        await new Promise((r) => setTimeout(r, 2000))
+        const sRes = await fetch(`/api/status/${taskId}`)
+        const sJson = await sRes.json()
+        if (sJson.state === 'SUCCESS') {
+          result = sJson.result
+          break
+        }
+        if (sJson.state === 'FAILURE') throw new Error('Download failed')
+      }
+      if (!result) throw new Error('Download timed out')
+      if (result.error) throw new Error(result.error)
+
+      const audioRes = await fetch(`/api/download/${taskId}`)
+      const blob = await audioRes.blob()
+
+      setFile(blob)
+      setFileName(result.filename || 'downloaded-audio.wav')
+      setIsLoaded(false)
+      setIsPlaying(false)
+      setCurrentTime(0)
+      cancelAnimationFrame(animFrameRef.current)
+      clearInterval(timeIntervalRef.current)
+      loadAudio(blob)
+    } catch (err) {
+      console.error('[PitchShifter] loadFromUrl failed:', err)
+      setAudioError('Failed to load from URL: ' + err.message)
+    } finally {
+      setUrlLoading(false)
+    }
   }
 
   // Pre-load the bundled demo clip when launched from the "try it" strip,
@@ -364,18 +416,46 @@ export default function PitchShifter({ onBack, autoLoadUrl }) {
 
       {/* File upload */}
       <div className="upload-section">
-        <div className="file-input-wrapper">
-          <input
-            id="pitch-file-input"
-            type="file"
-            accept="audio/*"
-            onChange={handleFileChange}
-          />
-          <label htmlFor="pitch-file-input" className={`file-input-label ${file ? 'has-file' : ''}`}>
-            <span className="file-icon">{file ? '✓' : '📁'}</span>
-            <span>{file ? fileName : 'Choose an audio file or drag it here'}</span>
-          </label>
+        <div className="input-mode-toggle">
+          <button type="button" className={inputMode === 'file' ? 'active' : ''} onClick={() => setInputMode('file')}>
+            📁 Upload a file
+          </button>
+          <button type="button" className={inputMode === 'url' ? 'active' : ''} onClick={() => setInputMode('url')}>
+            🔗 Paste a YouTube URL
+          </button>
         </div>
+        {inputMode === 'url' ? (
+          <div className="url-input-wrapper">
+            <div className="instruction-row">
+              <input
+                type="text"
+                placeholder="Paste a YouTube (or any yt-dlp-supported) URL"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && loadFromUrl()}
+                className="url-input instruction-input"
+              />
+              <GlassButton variant="pill" onClick={loadFromUrl} disabled={urlLoading || !url.trim()}>
+                {urlLoading ? <span className="loader"></span> : 'Load'}
+              </GlassButton>
+            </div>
+            {urlLoading && <p className="instruction-explanation">Downloading and converting — this can take a little while…</p>}
+            {file && !urlLoading && fileName && inputMode === 'url' && <p className="instruction-explanation">✓ Loaded {fileName}</p>}
+          </div>
+        ) : (
+          <div className="file-input-wrapper">
+            <input
+              id="pitch-file-input"
+              type="file"
+              accept="audio/*"
+              onChange={handleFileChange}
+            />
+            <label htmlFor="pitch-file-input" className={`file-input-label ${file ? 'has-file' : ''}`}>
+              <span className="file-icon">{file ? '✓' : '📁'}</span>
+              <span>{file ? fileName : 'Choose an audio file or drag it here'}</span>
+            </label>
+          </div>
+        )}
         {audioError && <p className="remix-error">⚠ {audioError}</p>}
       </div>
 

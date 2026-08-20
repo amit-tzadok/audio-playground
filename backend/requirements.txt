@@ -13,3 +13,4 @@ requests
 noisereduce
 demucs
 faster-whisper
+boto3
